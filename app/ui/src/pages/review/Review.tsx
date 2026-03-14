@@ -20,8 +20,6 @@ import {
   CheckmarkFilled,
   ChevronDown16Regular,
   ChevronUp16Regular,
-  PanelLeftContractRegular,
-  PanelLeftExpandRegular,
   SearchRegular,
   ZoomInRegular,
   ZoomOutRegular,
@@ -48,10 +46,15 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.m
 const useStyles = makeStyles({
   layout: {
     display: 'grid',
-    gridTemplateColumns: '280px minmax(0, 1fr) 340px',
-    gap: '16px',
-    height: 'calc(100vh - 120px)',
+    gridTemplateColumns: 'clamp(220px, 18vw, 280px) minmax(0, 1fr) clamp(320px, 27vw, 420px)',
+    gap: '12px',
+    height: 'calc(100dvh - 120px)',
     overflow: 'hidden',
+    minHeight: 0,
+    '@media (max-width: 1366px)': {
+      gridTemplateColumns: 'clamp(200px, 17vw, 250px) minmax(0, 1fr) clamp(280px, 30vw, 360px)',
+      gap: '10px',
+    },
   },
   // ========== PANEL ==========
   panel: {
@@ -65,6 +68,7 @@ const useStyles = makeStyles({
   left: {
     display: 'flex',
     flexDirection: 'column',
+    minWidth: 0,
   },
   leftHeader: {
     padding: '12px',
@@ -116,6 +120,7 @@ const useStyles = makeStyles({
   center: {
     display: 'flex',
     flexDirection: 'column',
+    minWidth: 0,
   },
   toolbar: {
     padding: '8px 12px',
@@ -141,17 +146,12 @@ const useStyles = makeStyles({
     minWidth: '48px',
     textAlign: 'center',
   },
-  // ========== PDF COMPARISON ==========
+  // ========== PREVIEW ==========
   pdfCompareContainer: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
-    gap: '2px',
+    display: 'flex',
     flexGrow: 1,
     overflow: 'hidden',
-    backgroundColor: tokens.colorNeutralStroke2,
-  },
-  pdfCompareSingle: {
-    gridTemplateColumns: '1fr',
+    backgroundColor: tokens.colorNeutralBackground3,
   },
   pdfPane: {
     display: 'flex',
@@ -174,6 +174,7 @@ const useStyles = makeStyles({
     overflow: 'auto',
     display: 'flex',
     justifyContent: 'center',
+    alignItems: 'flex-start',
     flexGrow: 1,
     backgroundColor: tokens.colorNeutralBackground3,
   },
@@ -182,16 +183,45 @@ const useStyles = makeStyles({
     backgroundColor: '#fff',
     borderRadius: '4px',
     boxShadow: tokens.shadow16,
+    width: 'fit-content',
+    maxWidth: '100%',
+    overflow: 'visible',
+    marginLeft: 'auto',
+    marginRight: 'auto',
+  },
+  pdfPage: {
+    display: 'flex',
+    justifyContent: 'center',
+    width: '100%',
+    '& canvas': {
+      display: 'block',
+      marginLeft: 'auto',
+      marginRight: 'auto',
+    },
+  },
+  imagePreview: {
+    display: 'block',
+    maxWidth: '100%',
+    height: 'auto',
+  },
+  docxPreview: {
+    width: '100%',
+    minHeight: '100%',
+    padding: '16px',
+    boxSizing: 'border-box',
+    overflow: 'auto',
   },
   // ========== RIGHT ==========
   right: {
     overflowY: 'auto',
+    overflowX: 'hidden',
     display: 'flex',
     flexDirection: 'column',
     gap: '10px',
     padding: '12px',
     height: '100%',
     minHeight: 0,
+    minWidth: 0,
   },
   // ========== OVERVIEW ==========
   accordion: {
@@ -343,15 +373,18 @@ function Review() {
   const [searchParams] = useSearchParams()
 
   const [docId, setDocId] = useState<string>()
-  const [originalPdfData, setOriginalPdfData] = useState<{ data: Uint8Array }>()
+  const [, setOriginalPdfData] = useState<{ data: Uint8Array }>()
   const [pdfData, setPdfData] = useState<{ data: Uint8Array }>()
   const [pdfLoadError, setPdfLoadError] = useState<string>()
   const [pdfLoaded, setPdfLoaded] = useState(false)
   const [numPages, setNumPages] = useState<number>()
   const [pageNumber, setPageNumber] = useState(1)
   const [zoom, setZoom] = useState(1.0)
-  const [compareMode, setCompareMode] = useState(true)
+  const [fitMode, setFitMode] = useState<'page' | 'width'>('page')
   const [pdfContainerWidth, setPdfContainerWidth] = useState(700)
+  const [pdfViewportHeight, setPdfViewportHeight] = useState(900)
+  const [pageAspectRatio, setPageAspectRatio] = useState(0.707)
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string>()
 
   const [issues, setIssues] = useState<Issue[]>([])
   const [selectedIssueId, setSelectedIssueId] = useState<string>()
@@ -375,6 +408,9 @@ function Review() {
   const abortControllerRef = useRef<AbortController>()
   const enabledRuleIdsRef = useRef<string[]>([])
   const pdfContainerRef = useRef<HTMLDivElement>(null)
+  const pdfWrapRef = useRef<HTMLDivElement>(null)
+  const docxPreviewRef = useRef<HTMLDivElement>(null)
+  const docxFocusedElRef = useRef<HTMLElement | null>(null)
 
   // Keep ref in sync with state
   useEffect(() => {
@@ -386,6 +422,13 @@ function Review() {
     [issues, selectedIssueId],
   )
 
+  const isPdfDocument = useMemo(() => (docId ? docId.toLowerCase().endsWith('.pdf') : false), [docId])
+  const isImageDocument = useMemo(
+    () => (docId ? /\.(png|jpe?g|bmp|tiff?|webp)$/i.test(docId) : false),
+    [docId],
+  )
+  const isDocxDocument = useMemo(() => (docId ? docId.toLowerCase().endsWith('.docx') : false), [docId])
+
   const filteredIssues = useMemo(() => {
     const q = query.trim()
     return issues
@@ -394,6 +437,16 @@ function Review() {
       .slice()
       .sort((a, b) => (a.location?.page_num ?? 0) - (b.location?.page_num ?? 0))
   }, [issues, statusFilter, hideTypesFilter, query])
+
+  const pageRenderWidth = useMemo(() => {
+    const fitByWidth = Math.max(240, pdfContainerWidth)
+    if (fitMode === 'width') {
+      return Math.floor(fitByWidth * zoom)
+    }
+    // fitMode === 'page': Fit whole page into visible viewport by both width and height.
+    const fitByHeight = Math.max(240, pdfViewportHeight * pageAspectRatio)
+    return Math.floor(Math.min(fitByWidth, fitByHeight) * zoom)
+  }, [fitMode, pdfContainerWidth, pdfViewportHeight, pageAspectRatio, zoom])
 
   const types = useMemo(() => {
     const map = new Map<string, number>()
@@ -489,10 +542,24 @@ function Review() {
     setPdfLoaded(true)
   }
 
+  function onPageLoadSuccess(page: { width: number; height: number }) {
+    if (page.height > 0) {
+      setPageAspectRatio(page.width / page.height)
+    }
+  }
+
   function handleSelectIssue(issue: Issue) {
+    const clearDocxFocus = () => {
+      if (!docxFocusedElRef.current) return
+      docxFocusedElRef.current.style.outline = ''
+      docxFocusedElRef.current.style.backgroundColor = ''
+      docxFocusedElRef.current = null
+    }
+
     // 检查是否点击同一个 issue（取消选择）
     if (selectedIssueId === issue.id) {
       setSelectedIssueId(undefined)
+      clearDocxFocus()
       setSelectedAnnotId((annotId) => {
         if (annotId) {
           const pdfBytes = deleteAnnotation(annotId)
@@ -504,6 +571,7 @@ function Review() {
     }
 
     // 清除旧的注释
+    clearDocxFocus()
     setSelectedAnnotId((annotId) => {
       if (annotId) {
         const pdfBytes = deleteAnnotation(annotId)
@@ -521,7 +589,7 @@ function Review() {
     }
 
     // 添加新的注释高亮
-    if (issue.location?.bounding_box?.length) {
+    if (isPdfDocument && issue.location?.bounding_box?.length) {
       try {
         const [pdfBytes, annot] = addAnnotation(
           issue.location.page_num,
@@ -532,6 +600,25 @@ function Review() {
         setPdfData({ data: pdfBytes })
       } catch {
         // ignore
+      }
+    }
+
+    // DOCX: 基于问题文本做就近定位高亮
+    if (isDocxDocument && docxPreviewRef.current) {
+      const container = docxPreviewRef.current
+      const normalized = (issue.text ?? '').replace(/\s+/g, '')
+      const probe = normalized.slice(0, Math.min(18, normalized.length))
+      if (probe.length >= 4) {
+        const candidates = container.querySelectorAll<HTMLElement>('p, span, div, li, td')
+        const hit = Array.from(candidates).find((el) =>
+          (el.textContent ?? '').replace(/\s+/g, '').includes(probe),
+        )
+        if (hit) {
+          docxFocusedElRef.current = hit
+          hit.style.outline = '2px solid #d13438'
+          hit.style.backgroundColor = 'rgba(255, 64, 64, 0.15)'
+          hit.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        }
       }
     }
   }
@@ -557,10 +644,67 @@ function Review() {
   }, [searchParams])
 
   useEffect(() => {
-    async function loadPdf(id: string) {
+    async function loadPreview(id: string) {
       setPdfLoadError(undefined)
       setPdfLoaded(false)
+
+      if (!id.toLowerCase().endsWith('.pdf')) {
+        setOriginalPdfData(undefined)
+        setPdfData(undefined)
+
+        if (id.toLowerCase().endsWith('.docx')) {
+          try {
+            const wordBlob = await getBlob(id)
+            const wordBuffer = await wordBlob.arrayBuffer()
+            const { renderAsync } = await import('docx-preview')
+            setImagePreviewUrl((prev) => {
+              if (prev) URL.revokeObjectURL(prev)
+              return undefined
+            })
+            if (docxPreviewRef.current) {
+              docxPreviewRef.current.innerHTML = ''
+              await renderAsync(wordBuffer, docxPreviewRef.current, undefined, {
+                inWrapper: false,
+                ignoreWidth: false,
+                ignoreHeight: false,
+              })
+            }
+            return
+          } catch (e) {
+            setPdfLoadError(`Word 预览失败：${e instanceof Error ? e.message : String(e)}`)
+            return
+          }
+        }
+
+        if (docxPreviewRef.current) docxPreviewRef.current.innerHTML = ''
+        if (/\.(png|jpe?g|bmp|tiff?|webp)$/i.test(id)) {
+          try {
+            const imageBlob = await getBlob(id)
+            const nextUrl = URL.createObjectURL(imageBlob)
+            setImagePreviewUrl((prev) => {
+              if (prev) URL.revokeObjectURL(prev)
+              return nextUrl
+            })
+            return
+          } catch (e) {
+            setPdfLoadError(`加载预览失败：${e instanceof Error ? e.message : String(e)}`)
+            return
+          }
+        }
+        setImagePreviewUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev)
+          return undefined
+        })
+        setPdfLoadError('当前文件类型暂不支持页面预览，可直接查看审阅结果')
+        return
+      }
+
       try {
+        if (docxPreviewRef.current) docxPreviewRef.current.innerHTML = ''
+        setImagePreviewUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev)
+          return undefined
+        })
         const pdfBlob = await getBlob(id)
         const pdfByteArray = new Uint8Array(await pdfBlob.arrayBuffer())
         // Store original PDF for comparison
@@ -571,7 +715,7 @@ function Review() {
         setPdfLoadError(`加载失败：${e instanceof Error ? e.message : String(e)}`)
       }
     }
-    if (docId) loadPdf(docId)
+    if (docId) loadPreview(docId)
   }, [docId])
 
   useEffect(() => {
@@ -597,12 +741,21 @@ function Review() {
         const availableWidth = containerWidth - 48
         setPdfContainerWidth(availableWidth)
       }
+      if (pdfWrapRef.current) {
+        // Reserve small visual breathing room in card wrap.
+        setPdfViewportHeight(Math.max(240, pdfWrapRef.current.offsetHeight - 24))
+      }
     }
     updateWidth()
     window.addEventListener('resize', updateWidth)
     return () => window.removeEventListener('resize', updateWidth)
-  }, [compareMode])
-
+  }, [])
+  useEffect(() => {
+    return () => {
+      if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl)
+      if (docxPreviewRef.current) docxPreviewRef.current.innerHTML = ''
+    }
+  }, [imagePreviewUrl])
   const checkButtonIcon = checkInProgress ? <Spinner size="tiny" /> : checkComplete ? <CheckmarkFilled /> : undefined
 
   return (
@@ -687,23 +840,51 @@ function Review() {
         <div className={classes.toolbar}>
           <div className={classes.toolbarSection}>
             <Toolbar size="small">
-              <ToolbarButton icon={<ChevronUp16Regular />} onClick={() => setPageNumber((p) => Math.max(1, p - 1))} disabled={pageNumber === 1} />
-              <ToolbarButton icon={<ChevronDown16Regular />} onClick={() => setPageNumber((p) => Math.min(numPages ?? p + 1, p + 1))} disabled={!!numPages && pageNumber === numPages} />
+              <ToolbarButton
+                icon={<ChevronUp16Regular />}
+                onClick={() => setPageNumber((p) => Math.max(1, p - 1))}
+                disabled={!isPdfDocument || pageNumber === 1}
+              />
+              <ToolbarButton
+                icon={<ChevronDown16Regular />}
+                onClick={() => setPageNumber((p) => Math.min(numPages ?? p + 1, p + 1))}
+                disabled={!isPdfDocument || (!!numPages && pageNumber === numPages)}
+              />
             </Toolbar>
-            <span className={classes.pageInfo}>{pageNumber}/{numPages ?? '-'}</span>
+            <span className={classes.pageInfo}>{isPdfDocument ? `${pageNumber}/${numPages ?? '-'}` : '单页预览'}</span>
           </div>
           <div className={classes.toolbarSection}>
             <Button
               size="small"
-              appearance={compareMode ? 'primary' : 'secondary'}
-              icon={compareMode ? <PanelLeftContractRegular /> : <PanelLeftExpandRegular />}
-              onClick={() => setCompareMode((m) => !m)}
+              appearance={fitMode === 'page' ? 'primary' : 'secondary'}
+              onClick={() => setFitMode('page')}
+              disabled={!isPdfDocument}
             >
-              {compareMode ? '单视图' : '对比'}
+              适应整页
             </Button>
-            <Button size="small" appearance="subtle" icon={<ZoomOutRegular />} onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.1).toFixed(2)))} />
+            <Button
+              size="small"
+              appearance={fitMode === 'width' ? 'primary' : 'secondary'}
+              onClick={() => setFitMode('width')}
+              disabled={!isPdfDocument}
+            >
+              适应宽度
+            </Button>
+            <Button
+              size="small"
+              appearance="subtle"
+              icon={<ZoomOutRegular />}
+              onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.1).toFixed(2)))}
+              disabled={!isPdfDocument}
+            />
             <span className={classes.zoomInfo}>{Math.round(zoom * 100)}%</span>
-            <Button size="small" appearance="subtle" icon={<ZoomInRegular />} onClick={() => setZoom((z) => Math.min(2, +(z + 0.1).toFixed(2)))} />
+            <Button
+              size="small"
+              appearance="subtle"
+              icon={<ZoomInRegular />}
+              onClick={() => setZoom((z) => Math.min(2, +(z + 0.1).toFixed(2)))}
+              disabled={!isPdfDocument}
+            />
             <Dropdown
               size="small"
               value={reviewParty === 'party_a' ? '保护甲方' : reviewParty === 'party_b' ? '保护乙方' : '双方平衡'}
@@ -729,38 +910,33 @@ function Review() {
             </Button>
           </div>
         </div>
-        <div ref={pdfContainerRef} className={`${classes.pdfCompareContainer} ${!compareMode ? classes.pdfCompareSingle : ''}`}>
-          {/* Original PDF */}
-          {compareMode && (
-            <div className={classes.pdfPane}>
-              <div className={classes.pdfPaneHeader}>原始文档</div>
-              <div className={classes.pdfWrap}>
-                <Card className={classes.pdfCard}>
-                  {pdfLoadError && (
-                    <MessageBar intent="error">
-                      <MessageBarBody>{pdfLoadError}</MessageBarBody>
-                    </MessageBar>
-                  )}
-                  <Document file={originalPdfData} loading={<Spinner />} noData={<Spinner />}>
-                    <Page pageNumber={pageNumber} width={Math.floor((compareMode ? pdfContainerWidth / 2 : pdfContainerWidth) * zoom)} loading={<Spinner />} />
-                  </Document>
-                </Card>
-              </div>
-            </div>
-          )}
-          {/* Annotated PDF */}
+        <div ref={pdfContainerRef} className={classes.pdfCompareContainer}>
           <div className={classes.pdfPane}>
-            {compareMode && <div className={classes.pdfPaneHeader}>标注文档</div>}
-            <div className={classes.pdfWrap}>
+            <div className={classes.pdfPaneHeader}>文档预览</div>
+            <div ref={pdfWrapRef} className={classes.pdfWrap}>
               <Card className={classes.pdfCard}>
-                {pdfLoadError && !compareMode && (
+                {pdfLoadError && (
                   <MessageBar intent="error">
                     <MessageBarBody>{pdfLoadError}</MessageBarBody>
                   </MessageBar>
                 )}
-                <Document file={pdfData} onLoadSuccess={onDocumentLoadSuccess} loading={<Spinner />} noData={<Spinner />}>
-                  <Page pageNumber={pageNumber} width={Math.floor((compareMode ? pdfContainerWidth / 2 : pdfContainerWidth) * zoom)} loading={<Spinner />} />
-                </Document>
+                {isPdfDocument ? (
+                  <Document file={pdfData} onLoadSuccess={onDocumentLoadSuccess} loading={<Spinner />} noData={<Spinner />}>
+                    <Page
+                      className={classes.pdfPage}
+                      pageNumber={pageNumber}
+                      width={pageRenderWidth}
+                      loading={<Spinner />}
+                      onLoadSuccess={onPageLoadSuccess}
+                    />
+                  </Document>
+                ) : isImageDocument && imagePreviewUrl ? (
+                  <img src={imagePreviewUrl} alt={docId} className={classes.imagePreview} />
+                ) : isDocxDocument ? (
+                  <div ref={docxPreviewRef} className={classes.docxPreview} />
+                ) : (
+                  <div className={classes.noIssues}>当前文件类型暂不支持页面预览，可直接查看审阅结果。</div>
+                )}
               </Card>
             </div>
           </div>
@@ -858,26 +1034,3 @@ function Review() {
 }
 
 export default Review
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

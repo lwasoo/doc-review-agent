@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     mineru_max_wait_sec: float = 300.0
     mineru_cache_artifacts: bool = True
     mineru_cache_dir: str = "./app/data/mineru"
+    mineru_cache_cleanup_enabled: bool = True
+    mineru_cache_retention_days: int = 7
+    mineru_cache_max_files: int = 200
     # MinerU bbox coordinate assumptions
     # Most MinerU JSON outputs use image-like coordinates with origin at top-left.
     mineru_bbox_origin: str = "top-left"  # "top-left" or "bottom-left"

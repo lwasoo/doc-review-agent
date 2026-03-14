@@ -109,6 +109,7 @@ if errorlevel 1 (
     exit /b 1
 )
 echo ✅ npm 依赖安装完成
+echo    ℹ️ 已包含 Word 预览依赖（docx-preview）
 
 cd ..\..
 echo.

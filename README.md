@@ -4,6 +4,7 @@
 
 ## 功能
 - PDF 上传与解析（MinerU）
+- Word（.docx）预览
 - LLM 审阅（DeepSeek）
 - 风险分级（高/中/低）
 - 规则管理与审阅结果流式展示
@@ -34,6 +35,9 @@ cd app/ui
 npm install
 npm run dev
 ```
+
+说明：Word 预览依赖 `docx-preview` 已写入 `app/ui/package.json`。  
+如果你是从旧版本更新代码，请在 `app/ui` 目录重新执行一次 `npm install`。
 
 ## 环境变量
 请使用模板文件创建本地环境变量：

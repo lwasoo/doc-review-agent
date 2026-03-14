@@ -4,6 +4,7 @@ import json
 import asyncio
 import time
 import zipfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -25,6 +26,7 @@ class MinerUClient:
         3) Poll /api/v4/extract-results/batch/{batch_id} for state=done
         4) Download `full_zip_url` and parse a JSON artifact inside
     """
+    _cache_cleanup_done = False
 
     def __init__(self) -> None:
         self.base_url = settings.mineru_base_url.rstrip("/")
@@ -39,6 +41,8 @@ class MinerUClient:
 
         if not file_path.exists():
             raise FileNotFoundError(str(file_path))
+
+        self._cleanup_cache_if_needed()
 
         logging.info(f"Calling MinerU (v4) for file: {file_path}")
 
@@ -60,6 +64,61 @@ class MinerUClient:
                 logging.warning(f"Failed to save MinerU debug JSON: {e}")
         # Return both content and meta so downstream can do precise bbox mapping.
         return {"content": payload, "meta": meta}
+
+    def _cleanup_cache_if_needed(self) -> None:
+        if not settings.mineru_cache_cleanup_enabled:
+            return
+        if MinerUClient._cache_cleanup_done:
+            return
+        try:
+            self._cleanup_cache_dir()
+            MinerUClient._cache_cleanup_done = True
+        except Exception as e:
+            logging.warning(f"MinerU cache cleanup failed: {e}")
+
+    def _cleanup_cache_dir(self) -> None:
+        cache_dir = Path(settings.mineru_cache_dir)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Only manage known cache artifact files.
+        allowed_suffixes = {".json", ".meta.json", ".zip", ".layout.json"}
+        files = [p for p in cache_dir.iterdir() if p.is_file() and _has_any_suffix(p.name, allowed_suffixes)]
+        if not files:
+            return
+
+        deleted_count = 0
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=max(0, int(settings.mineru_cache_retention_days)))
+
+        # 1) Age-based cleanup
+        for p in files:
+            try:
+                mtime = datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc)
+                if mtime < cutoff:
+                    p.unlink(missing_ok=True)
+                    deleted_count += 1
+            except Exception:
+                continue
+
+        # Refresh file list after age-based deletion
+        files = [p for p in cache_dir.iterdir() if p.is_file() and _has_any_suffix(p.name, allowed_suffixes)]
+
+        # 2) Count-based cleanup (keep newest N files)
+        max_files = max(0, int(settings.mineru_cache_max_files))
+        if max_files and len(files) > max_files:
+            files_sorted = sorted(files, key=lambda x: x.stat().st_mtime, reverse=True)
+            for p in files_sorted[max_files:]:
+                try:
+                    p.unlink(missing_ok=True)
+                    deleted_count += 1
+                except Exception:
+                    continue
+
+        if deleted_count > 0:
+            logging.info(
+                f"MinerU cache cleanup completed: deleted {deleted_count} files "
+                f"(retention_days={settings.mineru_cache_retention_days}, max_files={settings.mineru_cache_max_files})."
+            )
 
     async def _request_upload_url(self, file_name: str) -> tuple[str, str]:
         url = f"{self.base_url}/api/v4/file-urls/batch"
@@ -400,6 +459,11 @@ def _infer_page_num_from_filename(name: str) -> int | None:
 
 def _safe_stem(stem: str) -> str:
     return "".join([c if c.isalnum() or c in ("-", "_") else "_" for c in stem])
+
+
+def _has_any_suffix(filename: str, suffixes: set[str]) -> bool:
+    lname = filename.lower()
+    return any(lname.endswith(sfx) for sfx in suffixes)
 
 
 def _extract_page_canvas_sizes_from_layout(layout: Any) -> Dict[str, List[int]]:

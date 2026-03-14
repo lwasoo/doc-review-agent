@@ -29,9 +29,9 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: '8px',
-    flexShrink: 1,
+    flexShrink: 0,
     minHeight: 0,
-    maxHeight: '45vh',
+    maxHeight: 'min(62vh, 720px)',
   },
   // ========== PANEL ==========
   panel: {
@@ -80,11 +80,12 @@ const useStyles = makeStyles({
     gap: '12px',
     overflowY: 'auto',
     flex: 1,
-    minHeight: 0,
+    minHeight: 'clamp(220px, 30vh, 340px)',
   },
   textareaField: {
     '& textarea': {
       backgroundColor: tokens.colorNeutralBackground2,
+      minHeight: 'clamp(120px, 18vh, 220px)',
       borderTopColor: tokens.colorNeutralStroke2,
       borderRightColor: tokens.colorNeutralStroke2,
       borderBottomColor: tokens.colorNeutralStroke2,
@@ -360,7 +361,7 @@ export function IssueDetailsPanel({
               readOnly={!editable}
               value={modifiedExplanation ?? defaults.explanation}
               onChange={(e) => setModifiedExplanation(e.target.value)}
-              rows={4}
+              rows={6}
               resize="vertical"
             />
           </Field>
@@ -370,7 +371,7 @@ export function IssueDetailsPanel({
               readOnly={!editable}
               value={modifiedSuggestedFix ?? defaults.suggestedFix}
               onChange={(e) => setModifiedSuggestedFix(e.target.value)}
-              rows={4}
+              rows={6}
               resize="vertical"
             />
           </Field>
