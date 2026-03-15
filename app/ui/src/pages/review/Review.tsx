@@ -35,7 +35,7 @@ import { RulesPanel } from '../../components/RulesPanel'
 import { addAnnotation, deleteAnnotation, initAnnotations } from '../../services/annotations'
 import { buildIssuesPath, streamApi } from '../../services/api'
 import type { ReviewParty } from '../../services/api'
-import { getBlob } from '../../services/storage'
+import { downloadReviewedDocx, getBlob } from '../../services/storage'
 import { APIEvent } from '../../types/api-events'
 import { Issue, IssueStatus } from '../../types/issue'
 import { issueRiskLevel, issueRiskTone, issueStatusLabel, issueTypeDescription, issueTypeLabel, normalizeIssueStatus } from '../../i18n/labels'
@@ -404,6 +404,7 @@ function Review() {
   const [reviewParty, setReviewParty] = useState<ReviewParty>('both')
   const [hasStartedReview, setHasStartedReview] = useState(false)
   const [lastCompletedReviewParty, setLastCompletedReviewParty] = useState<ReviewParty>()
+  const [exporting, setExporting] = useState(false)
 
   const abortControllerRef = useRef<AbortController>()
   const enabledRuleIdsRef = useRef<string[]>([])
@@ -537,6 +538,19 @@ function Review() {
     )
   }, [docId, reviewParty])
 
+  const exportReviewedDocx = useCallback(async () => {
+    if (!docId) return
+    try {
+      setExporting(true)
+      setCheckError(undefined)
+      await downloadReviewedDocx(docId, true)
+    } catch (e) {
+      setCheckError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setExporting(false)
+    }
+  }, [docId])
+
   function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
     setNumPages(numPages)
     setPdfLoaded(true)
@@ -546,6 +560,41 @@ function Review() {
     if (page.height > 0) {
       setPageAspectRatio(page.width / page.height)
     }
+  }
+
+  function normalizeStrict(text: string): string {
+    return text.replace(/\s+/g, '').toLowerCase()
+  }
+
+  function normalizeLoose(text: string): string {
+    return text
+      .toLowerCase()
+      .replace(/^\s*[\(\[]?\d+[.)\]]?\s*/g, '')
+      .replace(/[\s\p{P}\p{S}]+/gu, '')
+  }
+
+  function candidateProbes(issue: Issue): string[] {
+    const probes: string[] = []
+    const sources = [
+      issue.location?.source_sentence ?? '',
+      issue.text ?? '',
+      issue.suggested_fix ?? '',
+    ]
+    const pushChunks = (raw: string) => {
+      const s = raw.trim()
+      if (!s) return
+      probes.push(s)
+      if (s.length > 120) probes.push(s.slice(0, 120))
+      if (s.length > 80) probes.push(s.slice(0, 80))
+      if (s.length > 50) probes.push(s.slice(0, 50))
+      const noLead = s.replace(/^\s*[\(\[]?\d+[.)\]]?\s*/g, '').trim()
+      if (noLead && noLead !== s) {
+        probes.push(noLead)
+        if (noLead.length > 80) probes.push(noLead.slice(0, 80))
+      }
+    }
+    for (const src of sources) pushChunks(src)
+    return probes.filter((p, i, arr) => p.length >= 6 && arr.indexOf(p) === i)
   }
 
   function handleSelectIssue(issue: Issue) {
@@ -603,16 +652,27 @@ function Review() {
       }
     }
 
-    // DOCX: 基于问题文本做就近定位高亮
+    // DOCX: 使用 source_sentence + text 多信号匹配，降低序号/OCR误差带来的漏标
     if (isDocxDocument && docxPreviewRef.current) {
       const container = docxPreviewRef.current
-      const normalized = (issue.text ?? '').replace(/\s+/g, '')
-      const probe = normalized.slice(0, Math.min(18, normalized.length))
-      if (probe.length >= 4) {
-        const candidates = container.querySelectorAll<HTMLElement>('p, span, div, li, td')
-        const hit = Array.from(candidates).find((el) =>
-          (el.textContent ?? '').replace(/\s+/g, '').includes(probe),
-        )
+      const probes = candidateProbes(issue)
+      if (probes.length > 0) {
+        const candidates = Array.from(container.querySelectorAll<HTMLElement>('p, span, div, li, td'))
+        let hit: HTMLElement | undefined
+        for (const probe of probes) {
+          const strictProbe = normalizeStrict(probe)
+          const looseProbe = normalizeLoose(probe)
+          if (strictProbe.length < 6 && looseProbe.length < 6) continue
+          hit = candidates.find((el) => {
+            const text = el.textContent ?? ''
+            const strictText = normalizeStrict(text)
+            const looseText = normalizeLoose(text)
+            const strictMatch = strictProbe.length >= 6 && strictText.includes(strictProbe)
+            const looseMatch = looseProbe.length >= 6 && looseText.includes(looseProbe)
+            return strictMatch || looseMatch
+          })
+          if (hit) break
+        }
         if (hit) {
           docxFocusedElRef.current = hit
           hit.style.outline = '2px solid #d13438'
@@ -901,9 +961,17 @@ function Review() {
               appearance="primary"
               icon={checkButtonIcon}
               disabled={checkInProgress}
-              onClick={() => runCheck(hasStartedReview && lastCompletedReviewParty !== reviewParty)}
+              onClick={() => runCheck(hasStartedReview)}
             >
               {hasStartedReview ? '重新审阅' : '开始审阅'}
+            </Button>
+            <Button
+              size="small"
+              appearance="secondary"
+              disabled={checkInProgress || exporting || issues.length === 0}
+              onClick={exportReviewedDocx}
+            >
+              {exporting ? '导出中...' : '导出审阅版'}
             </Button>
             <Button size="small" appearance="secondary" onClick={() => navigate('/')}>
               返回

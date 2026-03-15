@@ -57,3 +57,11 @@ def setup_logging():
         handlers=handlers,
         force=True,
     )
+
+    # Reduce OCR debug noise in console while keeping warnings/errors visible.
+    logging.getLogger("ppocr").setLevel(logging.WARNING)
+    logging.getLogger("paddleocr").setLevel(logging.WARNING)
+    logging.getLogger("paddlex").setLevel(logging.WARNING)
+
+    # Keep outbound HTTP visibility at INFO for troubleshooting provider calls.
+    logging.getLogger("httpx").setLevel(logging.INFO)

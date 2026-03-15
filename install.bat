@@ -1,127 +1,180 @@
 @echo off
+setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul 2>&1
-title AI Document Review - 安装依赖
+title AI Document Review - Install
 
 echo.
-echo ╔══════════════════════════════════════════════════════════╗
-echo ║        📦 AI Document Review - 安装依赖                  ║
-echo ╚══════════════════════════════════════════════════════════╝
+echo ============================================================
+echo   AI Document Review - Installer (Windows)
+echo ============================================================
 echo.
 
 cd /d "%~dp0"
-echo 📁 项目目录: %CD%
+echo [INFO] Project root: %CD%
 echo.
 
-:: ========== 检查环境 ==========
-echo ┌──────────────────────────────────────────────────────────┐
-echo │ 🔍 环境检查                                              │
-echo └──────────────────────────────────────────────────────────┘
-
-:: 检查 Node.js
-node --version >nul 2>&1
+echo [STEP] Checking Node.js and npm...
+where node >nul 2>&1
 if errorlevel 1 (
-    echo ❌ Node.js 未安装
-    echo    请访问 https://nodejs.org/ 下载安装
+    echo [ERROR] Node.js is not installed. Download: https://nodejs.org/
     pause
     exit /b 1
 )
-for /f "tokens=*" %%i in ('node --version') do echo ✅ Node.js: %%i
-
-:: 检查 npm
-npm --version >nul 2>&1
+where npm >nul 2>&1
 if errorlevel 1 (
-    echo ❌ npm 未安装
+    echo [ERROR] npm is not installed.
     pause
     exit /b 1
 )
-for /f "tokens=*" %%i in ('npm --version') do echo ✅ npm: %%i
-
-:: 检查 Python
-python --version >nul 2>&1
-if errorlevel 1 (
-    echo ❌ Python 未安装
-    echo    请访问 https://www.python.org/ 下载安装
-    pause
-    exit /b 1
-)
-for /f "tokens=*" %%i in ('python --version') do echo ✅ Python: %%i
-
+for /f "tokens=*" %%i in ('node --version') do echo [OK] Node.js: %%i
+for /f "tokens=*" %%i in ('npm --version') do echo [OK] npm: %%i
 echo.
 
-:: ========== 后端依赖 ==========
-echo ┌──────────────────────────────────────────────────────────┐
-echo │ 🔧 安装后端依赖 (Python)                                 │
-echo └──────────────────────────────────────────────────────────┘
+echo [STEP] Detecting Python (prefer 3.12 / 3.11 / 3.10)...
+set "PYTHON_CMD="
+py -3.12 --version >nul 2>&1 && set "PYTHON_CMD=py -3.12"
+if not defined PYTHON_CMD py -3.11 --version >nul 2>&1 && set "PYTHON_CMD=py -3.11"
+if not defined PYTHON_CMD py -3.10 --version >nul 2>&1 && set "PYTHON_CMD=py -3.10"
+if not defined PYTHON_CMD (
+    python --version >nul 2>&1 && set "PYTHON_CMD=python"
+)
+if not defined PYTHON_CMD (
+    echo [ERROR] Python not found. Please install Python 3.10+.
+    pause
+    exit /b 1
+)
+for /f "tokens=*" %%i in ('%PYTHON_CMD% --version') do set "PY_VERSION=%%i"
+echo [OK] !PY_VERSION!
+echo.
 
+echo [STEP] Installing backend dependencies...
 cd app\api
 
-:: 创建虚拟环境（如果不存在）
-if not exist "venv" (
-    echo 📦 创建 Python 虚拟环境...
-    python -m venv venv
+if not exist "venv\Scripts\python.exe" (
+    echo [INFO] Creating virtual environment in app\api\venv ...
+    %PYTHON_CMD% -m venv venv
     if errorlevel 1 (
-        echo ❌ 创建虚拟环境失败
+        echo [ERROR] Failed to create virtual environment.
         pause
         exit /b 1
     )
-    echo ✅ 虚拟环境已创建
 )
 
-:: 激活虚拟环境
 call venv\Scripts\activate.bat
-
-:: 安装依赖
-echo 📦 安装 Python 依赖...
-pip install -r requirements.txt -q
 if errorlevel 1 (
-    echo ❌ 安装 Python 依赖失败
+    echo [ERROR] Failed to activate virtual environment.
     pause
     exit /b 1
 )
-echo ✅ Python 依赖安装完成
 
-:: 检查 .env 文件
+python -m pip install --upgrade pip setuptools wheel
+if errorlevel 1 (
+    echo [ERROR] Failed to upgrade pip/setuptools/wheel.
+    pause
+    exit /b 1
+)
+
+pip install -r requirements.txt
+if errorlevel 1 (
+    echo [ERROR] Failed to install Python dependencies.
+    pause
+    exit /b 1
+)
+echo [OK] Python dependencies installed.
+
 if not exist ".env" (
     if exist ".env.tpl" (
-        echo.
-        echo ⚠️  未找到 .env 文件，正在从模板创建...
         copy .env.tpl .env >nul
-        echo ✅ 已创建 .env 文件，请编辑并配置 API Key
+        echo [OK] Created app\api\.env from template.
+    ) else (
+        echo [WARN] app\api\.env.tpl not found, skip creating .env
+    )
+)
+
+set "LLM_PROVIDER="
+set "OLLAMA_MODEL="
+for /f "usebackq tokens=1,* delims==" %%A in (".env") do (
+    set "K=%%A"
+    set "V=%%B"
+    if /I "!K!"=="LLM_PROVIDER" set "LLM_PROVIDER=!V!"
+    if /I "!K!"=="OLLAMA_MODEL" set "OLLAMA_MODEL=!V!"
+)
+if not defined OLLAMA_MODEL set "OLLAMA_MODEL=qwen2.5:7b-instruct-q4_K_M"
+
+if /I "!LLM_PROVIDER!"=="ollama" (
+    echo.
+    echo [STEP] LLM_PROVIDER=ollama detected. Preparing Ollama and model...
+    set "OFFLINE_ROOT=%CD%\..\..\offline_bundle"
+    set "OFFLINE_OLLAMA_WIN=!OFFLINE_ROOT!\ollama\windows\OllamaSetup.exe"
+    set "OFFLINE_MODELFILE=!OFFLINE_ROOT!\models\Modelfile"
+
+    where ollama >nul 2>&1
+    if errorlevel 1 (
+        if exist "!OFFLINE_OLLAMA_WIN!" (
+            echo [INFO] Found offline Ollama installer: !OFFLINE_OLLAMA_WIN!
+            echo [INFO] Launching installer...
+            start /wait "" "!OFFLINE_OLLAMA_WIN!"
+            where ollama >nul 2>&1
+        )
+    )
+
+    where ollama >nul 2>&1
+    if errorlevel 1 (
+        echo [WARN] Ollama not found. Install from: https://ollama.com/download
+        echo [WARN] Then run: ollama pull !OLLAMA_MODEL!
+    ) else (
+        set "MODEL_FOUND="
+        for /f "tokens=1" %%M in ('ollama list ^| findstr /R /B /I /C:"!OLLAMA_MODEL! "') do set "MODEL_FOUND=1"
+
+        if not defined MODEL_FOUND (
+            if exist "!OFFLINE_MODELFILE!" (
+                echo [INFO] Found offline model Modelfile: !OFFLINE_MODELFILE!
+                pushd "!OFFLINE_ROOT!\models"
+                ollama create !OLLAMA_MODEL! -f Modelfile
+                popd
+            )
+        )
+
+        set "MODEL_FOUND="
+        for /f "tokens=1" %%M in ('ollama list ^| findstr /R /B /I /C:"!OLLAMA_MODEL! "') do set "MODEL_FOUND=1"
+
+        if not defined MODEL_FOUND (
+            echo [INFO] Offline model not found. Trying online pull...
+            ollama pull !OLLAMA_MODEL!
+        )
+
+        set "MODEL_FOUND="
+        for /f "tokens=1" %%M in ('ollama list ^| findstr /R /B /I /C:"!OLLAMA_MODEL! "') do set "MODEL_FOUND=1"
+        if defined MODEL_FOUND (
+            echo [OK] Ollama model ready: !OLLAMA_MODEL!
+        ) else (
+            echo [WARN] Failed to prepare model: !OLLAMA_MODEL!
+            echo [WARN] Try manually:
+            echo        ollama pull !OLLAMA_MODEL!
+        )
     )
 )
 
 cd ..\..
 echo.
 
-:: ========== 前端依赖 ==========
-echo ┌──────────────────────────────────────────────────────────┐
-echo │ 🎨 安装前端依赖 (Node.js)                                │
-echo └──────────────────────────────────────────────────────────┘
-
+echo [STEP] Installing frontend dependencies...
 cd app\ui
-
-:: 安装 npm 依赖
-echo 📦 安装 npm 依赖...
 call npm install
 if errorlevel 1 (
-    echo ❌ 安装 npm 依赖失败
+    echo [ERROR] Failed to install npm dependencies.
     pause
     exit /b 1
 )
-echo ✅ npm 依赖安装完成
-echo    ℹ️ 已包含 Word 预览依赖（docx-preview）
-
+echo [OK] npm dependencies installed.
 cd ..\..
 echo.
 
-:: ========== 完成 ==========
-echo ═══════════════════════════════════════════════════════════
-echo 🎉 所有依赖安装完成！
-echo.
-echo 📌 下一步:
-echo    1. 编辑 app\api\.env 文件，配置必要的 API Key
-echo    2. 运行 start.bat 启动服务
-echo ═══════════════════════════════════════════════════════════
+echo ============================================================
+echo [DONE] Installation complete.
+echo [NEXT] 1) Review app\api\.env
+echo [NEXT] 2) Start with start.bat (or start.ps1)
+echo ============================================================
 echo.
 
 pause

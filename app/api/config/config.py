@@ -16,8 +16,10 @@ class Settings(BaseSettings):
     # Local storage / DB
     local_docs_dir: str = "./app/data/documents"
     sqlite_path: str = "./app/data/app.db"
+    export_docs_dir: str = "./app/data/exports"
 
     # MinerU
+    ocr_provider: str = "mineru"  # mineru | paddle
     mineru_base_url: str = "https://mineru.net"
     mineru_api_key: str = ""
     mineru_model_version: str = "vlm"
@@ -33,11 +35,20 @@ class Settings(BaseSettings):
     mineru_bbox_origin: str = "top-left"  # "top-left" or "bottom-left"
     mineru_bbox_units: str = "auto"  # "auto", "px", "pt"
     mineru_bbox_content_coverage: float = 0.92  # used to infer full-page bbox canvas size from content extents
+    # PaddleOCR (local)
+    paddleocr_lang: str = "ch"
+    paddleocr_use_angle_cls: bool = True
+    paddleocr_pdf_dpi: int = 180
 
     # LLM (DeepSeek via LangChain)
+    llm_provider: str = "deepseek"  # deepseek | ollama
+    llm_temperature: float = 0.2
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com/v1"
     deepseek_model: str = "chatdeepseek"
+    ollama_base_url: str = "http://127.0.0.1:11434/v1"
+    ollama_model: str = "qwen2.5:7b-instruct-q4_K_M"
+    ollama_api_key: str = "ollama"
     legal_review_party: str = "both"  # party_a, party_b, both
 
     # Streaming / batching

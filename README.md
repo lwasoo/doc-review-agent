@@ -15,11 +15,28 @@
 - `app/data`：本地运行数据（已忽略，不提交）
 
 ## 环境要求
-- Python 3.13（建议）
+- Python 3.10 - 3.12（推荐）
 - Node.js 18+
 - npm 9+
 
 ## 本地启动
+### 一键安装（推荐）
+- Windows：`.\install.bat`
+- Linux / macOS：`chmod +x install.sh && ./install.sh`
+
+安装脚本会自动完成：
+- 创建后端虚拟环境并安装 Python 依赖
+- 安装前端 npm 依赖
+- 若缺失则创建 `app/api/.env`
+- 当 `LLM_PROVIDER=ollama` 时，自动尝试拉取 `OLLAMA_MODEL`
+
+### 离线安装包（含 Ollama/模型）
+可选目录：`offline_bundle/`（见 [offline_bundle/README.md](./offline_bundle/README.md)）
+
+安装脚本逻辑：
+- 优先使用 `offline_bundle` 中的 Ollama 安装包/脚本
+- 优先使用 `offline_bundle/models/Modelfile` 导入本地模型
+- 都不可用时，回退到联网 `ollama pull`
 
 ### 1) 后端
 ```bash
@@ -45,6 +62,10 @@ npm run dev
 - `app/ui/.env.example`（若存在）
 
 不要提交真实 `.env` 或 API Key。
+
+OCR 引擎切换：
+- `OCR_PROVIDER=mineru`：云端 MinerU（默认）
+- `OCR_PROVIDER=paddle`：本地 PaddleOCR（免费，本机算力）
 
 ## 使用说明
 1. 在前端选择文档

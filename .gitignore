@@ -162,7 +162,9 @@ dist
 # Local app runtime data (documents, DB, MinerU cache)
 app/api/app/data/documents/
 app/api/app/data/mineru/
+app/api/app/data/exports/
 app/api/app/data/app.db
+app/api/app/data/
 dist-ssr
 coverage
 *.local

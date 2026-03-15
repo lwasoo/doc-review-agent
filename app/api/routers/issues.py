@@ -8,7 +8,7 @@ import json
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from common.logger import get_logger
@@ -298,6 +298,30 @@ async def resume_issue_hitl(
         decision=decision,
     )
     return await issues_service.hitl.get_issue(issue_id)
+
+
+@router.get(
+    "/api/v1/review/{doc_id}/export-docx",
+    summary="Export reviewed DOCX with accepted suggestions",
+)
+async def export_reviewed_docx(
+    doc_id: str,
+    accepted_only: bool = Query(True, description="Only export accepted suggestions"),
+    user=Depends(validate_authenticated),
+    issues_service: IssuesService = Depends(get_issues_service),
+):
+    del user
+    try:
+        out_path = await issues_service.export_reviewed_docx(doc_id, accepted_only=accepted_only)
+        return FileResponse(
+            out_path,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            filename=out_path.name,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 

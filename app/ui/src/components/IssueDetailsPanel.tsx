@@ -18,7 +18,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components'
-import { Checkmark16Regular, Dismiss16Regular, Edit16Regular } from '@fluentui/react-icons'
+import { Checkmark16Regular, Dismiss16Regular, Edit16Regular, Info16Regular } from '@fluentui/react-icons'
 import { useEffect, useMemo, useState } from 'react'
 import { callApi } from '../services/api'
 import { DismissalFeedback, Issue, IssueStatus, ModifiedFields } from '../types/issue'
@@ -28,10 +28,10 @@ const useStyles = makeStyles({
   wrap: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '8px',
+    gap: '6px',
     flexShrink: 0,
     minHeight: 0,
-    maxHeight: 'min(62vh, 720px)',
+    maxHeight: 'min(58vh, 680px)',
   },
   // ========== PANEL ==========
   panel: {
@@ -43,19 +43,37 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     maxHeight: '100%',
   },
+  sectionHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '8px',
+    padding: '8px 12px',
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  sectionTitle: {
+    fontSize: '11px',
+    fontWeight: 600,
+    color: tokens.colorNeutralForeground1,
+  },
   // ========== HEADER ==========
   headerMeta: {
     display: 'flex',
     alignItems: 'center',
-    gap: '8px',
+    gap: '6px',
     flexWrap: 'wrap',
-    marginTop: '6px',
+    marginTop: '4px',
   },
   headerTitle: {
-    fontSize: '14px',
+    fontSize: '13px',
     fontWeight: 600,
     color: tokens.colorNeutralForeground1,
-    lineHeight: '1.4',
+    lineHeight: '1.35',
+    display: '-webkit-box',
+    WebkitLineClamp: '4',
+    WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
   },
   pageTag: {
     display: 'inline-flex',
@@ -74,18 +92,18 @@ const useStyles = makeStyles({
   },
   // ========== FORM SECTION ==========
   formSection: {
-    padding: '12px 14px',
+    padding: '10px 12px',
     display: 'flex',
     flexDirection: 'column',
-    gap: '12px',
+    gap: '10px',
     overflowY: 'auto',
     flex: 1,
-    minHeight: 'clamp(220px, 30vh, 340px)',
+    minHeight: 'clamp(180px, 24vh, 280px)',
   },
   textareaField: {
     '& textarea': {
       backgroundColor: tokens.colorNeutralBackground2,
-      minHeight: 'clamp(120px, 18vh, 220px)',
+      minHeight: 'clamp(90px, 14vh, 160px)',
       borderTopColor: tokens.colorNeutralStroke2,
       borderRightColor: tokens.colorNeutralStroke2,
       borderBottomColor: tokens.colorNeutralStroke2,
@@ -114,7 +132,7 @@ const useStyles = makeStyles({
     alignItems: 'center',
     justifyContent: 'flex-end',
     flexWrap: 'nowrap',
-    padding: '10px 14px',
+    padding: '8px 12px',
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     flexShrink: 0,
     backgroundColor: tokens.colorNeutralBackground1,
@@ -182,6 +200,7 @@ export function IssueDetailsPanel({
   const [hitlInterruptId, setHitlInterruptId] = useState<string>()
   const [hitlArgsJson, setHitlArgsJson] = useState<string>('')
   const [hitlError, setHitlError] = useState<string>()
+  const [guideOpen, setGuideOpen] = useState(false)
 
   const current = issue
 
@@ -306,8 +325,17 @@ export function IssueDetailsPanel({
     return (
       <div className={classes.wrap}>
         <Card className={classes.panel}>
+          <div className={classes.sectionHeader}>
+            <span className={classes.sectionTitle}>问题详情</span>
+            <Button
+              size="small"
+              appearance="subtle"
+              icon={<Info16Regular />}
+              onClick={() => setGuideOpen(true)}
+            />
+          </div>
           <div className={classes.emptyCard}>
-            <div className={classes.emptyTitle}>问题详情</div>
+            <div className={classes.emptyTitle}>请选择左侧问题</div>
             <div className={classes.emptyDesc}>
               选择左侧问题列表中的项目以查看详情并进行处理。
               支持采纳建议、不采纳或进行人工复核（HITL）操作。
@@ -325,6 +353,15 @@ export function IssueDetailsPanel({
     <div className={classes.wrap}>
       {/* Issue Header Card */}
       <Card className={classes.panel}>
+        <div className={classes.sectionHeader}>
+          <span className={classes.sectionTitle}>问题详情</span>
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<Info16Regular />}
+            onClick={() => setGuideOpen(true)}
+          />
+        </div>
         <CardHeader
           header={<span className={classes.headerTitle}>{current.text}</span>}
           description={
@@ -500,6 +537,22 @@ export function IssueDetailsPanel({
                 确认执行
               </Button>
             </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      <Dialog open={guideOpen} onOpenChange={(_, data) => setGuideOpen(data.open)}>
+        <DialogSurface className={classes.dialogSurface}>
+          <DialogBody>
+            <DialogTitle>右侧栏怎么用</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '13px', lineHeight: '1.6' }}>
+                <div>1. 左侧点选一个问题，右侧会显示该问题详情。</div>
+                <div>2. 在“问题说明 / 修改建议”中可人工改写（法务润色）。</div>
+                <div>3. 点“采纳建议”表示确认，点“不采纳”表示驳回，点“人工复核”进入审批流。</div>
+                <div>4. 完成后点击上方“导出审阅版”，系统会生成可下载的 DOCX 审阅结果。</div>
+              </div>
+            </DialogContent>
           </DialogBody>
         </DialogSurface>
       </Dialog>

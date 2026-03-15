@@ -8,6 +8,7 @@ LOCAL_DOCS_DIR=./app/data/documents
 SQLITE_PATH=./app/data/app.db
 
 # MinerU
+OCR_PROVIDER=mineru
 MINERU_BASE_URL=https://mineru.net
 MINERU_API_KEY=
 MINERU_MODEL_VERSION=vlm
@@ -22,10 +23,20 @@ MINERU_BBOX_ORIGIN=top-left
 MINERU_BBOX_UNITS=auto
 MINERU_BBOX_CONTENT_COVERAGE=0.92
 
+# PaddleOCR (local)
+PADDLEOCR_LANG=ch
+PADDLEOCR_USE_ANGLE_CLS=True
+PADDLEOCR_PDF_DPI=180
+
 # DeepSeek
+LLM_PROVIDER=deepseek
+LLM_TEMPERATURE=0.2
 DEEPSEEK_API_KEY=
 DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
 DEEPSEEK_MODEL=deepseek-chat
+OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
+OLLAMA_MODEL=qwen2.5:7b-instruct-q4_K_M
+OLLAMA_API_KEY=ollama
 LEGAL_REVIEW_PARTY=both
 
 # Pagination (paragraphs per chunk; -1 to disable)

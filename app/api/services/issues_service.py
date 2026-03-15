@@ -6,10 +6,12 @@ from uuid import uuid4
 
 from common.logger import get_logger
 from common.models import DismissalFeedbackModel, Issue, IssueStatusEnum, ModifiedFieldsModel, ReviewRule
+from config.config import settings
 from database.issues_repository import IssuesRepository
 from security.auth import User
 from services.hitl_agent import HitlIssuesAgent
 from services.lc_pipeline import LangChainPipeline
+from services.review_docx_exporter import export_review_docx
 
 logging = get_logger(__name__)
 
@@ -154,3 +156,12 @@ class IssuesService:
         except Exception as e:
             logging.error(f"Failed to provide feedback on issue {issue_id}: {e}")
             raise
+
+    async def export_reviewed_docx(self, doc_id: str, accepted_only: bool = True) -> Path:
+        source = Path(settings.local_docs_dir) / doc_id
+        if not source.exists():
+            raise FileNotFoundError(f"Document not found: {doc_id}")
+        issues = await self.get_issues_data(doc_id)
+        if not issues:
+            raise ValueError("No review issues found for this document.")
+        return await asyncio.to_thread(export_review_docx, source, issues, accepted_only)

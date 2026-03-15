@@ -12,3 +12,7 @@ pydantic-settings==2.5.2
 sse-starlette==1.8.2
 pymupdf==1.24.14
 common==0.1.0
+
+# Optional local OCR provider (OCR_PROVIDER=paddle)
+paddlepaddle==2.6.2
+paddleocr==2.10.0

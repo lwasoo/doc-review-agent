@@ -17,6 +17,7 @@ from common.models import Issue, IssueStatusEnum, IssueType, Location, ReviewRul
 from config.config import settings
 from services.bbox import bbox_to_quadpoints
 from services.mineru_client import MinerUClient
+from services.paddle_ocr_client import PaddleOCRClient
 
 logging = get_logger(__name__)
 
@@ -36,6 +37,9 @@ class ReviewIssue(BaseModel):
     explanation: str
     suggested_fix: str
     para_index: int = Field(description="Index of the paragraph in the provided chunk input")
+    affected_party: str = Field(
+        description="Which party is disadvantaged by this issue"
+    )
 
 
 class ReviewOutput(BaseModel):
@@ -55,12 +59,42 @@ Return structured output that matches the requested schema.
 
 
 def _review_party_text(raw_party: str | None) -> str:
+    targets = _parse_review_targets(raw_party)
+    if "both" in targets or not targets:
+        return "甲乙双方"
+    labels: list[str] = []
+    for t in sorted(targets):
+        if t == "party_a":
+            labels.append("甲方")
+        elif t == "party_b":
+            labels.append("乙方")
+        else:
+            labels.append(t)
+    return "、".join(labels)
+
+
+def _parse_review_targets(raw_party: str | None) -> set[str]:
     value = (raw_party or "both").strip().lower()
-    if value in ("party_a", "a", "甲方", "first_party"):
-        return "甲方"
-    if value in ("party_b", "b", "乙方", "second_party"):
-        return "乙方"
-    return "甲乙双方"
+    if not value:
+        return {"both"}
+    tokens = [t.strip() for t in re.split(r"[,\s]+", value) if t.strip()]
+    if not tokens:
+        return {"both"}
+
+    out: set[str] = set()
+    for tok in tokens:
+        if tok in {"both", "all", "balanced", "甲乙双方"}:
+            return {"both"}
+        if tok in {"party_a", "a", "甲方", "first_party"}:
+            out.add("party_a")
+            continue
+        if tok in {"party_b", "b", "乙方", "second_party"}:
+            out.add("party_b")
+            continue
+        if re.fullmatch(r"party_[a-z0-9]+", tok):
+            out.add(tok)
+            continue
+    return out or {"both"}
 
 def _build_system_prompt(custom_rules: List[ReviewRule] | None = None, review_party: str = "both") -> str:
     """Build system prompt with legal-review focus and custom rules."""
@@ -96,8 +130,15 @@ def _build_system_prompt(custom_rules: List[ReviewRule] | None = None, review_pa
 
 输出要求：
 - 使用输入段落索引 para_index（如 [0],[1]）
-- explanation 说明法律风险点与不利方
-- suggested_fix 给出可落地、尽量可直接替换的修改建议
+- explanation 必须使用中文，说明法律风险点与不利方
+- suggested_fix 按原条款语言输出（原文是中文就用中文；原文是英文就用英文）
+- suggested_fix 必须是“可直接替换原文”的具体改写条款，避免空泛原则性表述
+- suggested_fix 优先保留原条款结构并就地改写，必要时补充缺失要素（主体、条件、期限、责任、争议处理）
+- 若原文缺少关键数值，不得臆造；使用【待约定】（英文用 [TBD]）占位
+- affected_party 必填：party_a / party_b / both，或在多方合同中使用 party_c / party_d ...
+- 当审查立场为单方（如 party_a）时，只输出对该方不利或双方共同不利的问题
+- 当审查立场为多方（如 party_a,party_c）时，只输出对这些目标方不利或双方共同不利的问题
+- 当审查立场为 both 时，可输出所有 affected_party
 - 无问题时返回空列表
 - 严格按 JSON schema 输出
 """
@@ -177,6 +218,7 @@ def _parse_review_output(content_text: str, parser: PydanticOutputParser) -> Rev
                     explanation=str(item.get("explanation") or ""),
                     suggested_fix=str(item.get("suggested_fix") or ""),
                     para_index=int(item.get("para_index") or 0),
+                    affected_party=str(item.get("affected_party") or "both"),
                 )
             )
         except Exception:
@@ -184,13 +226,72 @@ def _parse_review_output(content_text: str, parser: PydanticOutputParser) -> Rev
 
     return ReviewOutput(issues=parsed)
 
+
+def _normalize_for_match(text: str) -> str:
+    return re.sub(r"[\s\W_]+", "", (text or "").lower())
+
+
+def _best_para_index_for_issue(
+    chunk: List[Dict[str, Any]],
+    requested_index: int,
+    issue_text: str,
+) -> int:
+    """
+    LLM may return an imprecise para_index for long/numbered legal clauses.
+    Re-rank candidate paragraph by text similarity to reduce wrong highlights.
+    """
+    if not chunk:
+        return 0
+
+    requested_index = requested_index if 0 <= requested_index < len(chunk) else 0
+    needle_raw = (issue_text or "").strip()
+    if not needle_raw:
+        return requested_index
+
+    needle = _normalize_for_match(needle_raw)
+    if not needle:
+        return requested_index
+
+    best_idx = requested_index
+    best_score = -1.0
+
+    for idx, para in enumerate(chunk):
+        para_text = str(para.get("content") or "")
+        norm_para = _normalize_for_match(para_text)
+        if not norm_para:
+            continue
+
+        # Strong signal: direct substring containment
+        if needle in norm_para:
+            contain_bonus = 1.0
+        else:
+            contain_bonus = 0.0
+
+        # Similarity fallback for OCR / punctuation / numbering noise
+        sim = SequenceMatcher(None, needle[:400], norm_para[:1200]).ratio()
+
+        # Slightly prefer the originally suggested index when scores are close.
+        near_bonus = 0.02 if idx == requested_index else 0.0
+        score = contain_bonus + sim + near_bonus
+
+        if score > best_score:
+            best_score = score
+            best_idx = idx
+
+    return best_idx
+
+
 class LangChainPipeline:
     def __init__(self) -> None:
-        # Prefer LangChain v1 provider-based initialization for DeepSeek.
-        # This avoids OpenAI "response_format" structured output features that DeepSeek may not support.
-        self.llm = _init_deepseek_model()
+        self.llm = _init_llm_model()
         self.parser = PydanticOutputParser(pydantic_object=ReviewOutput)
-        self.mineru = MinerUClient()
+        provider = (settings.ocr_provider or "mineru").strip().lower()
+        if provider == "paddle":
+            self.ocr = PaddleOCRClient()
+            self.ocr_name = "PaddleOCR"
+        else:
+            self.ocr = MinerUClient()
+            self.ocr_name = "MinerU"
 
     async def stream_issues(
         self,
@@ -200,22 +301,23 @@ class LangChainPipeline:
         custom_rules: List[ReviewRule] | None = None,
         review_party: str | None = None,
     ) -> AsyncGenerator[List[Issue], None]:
-        """End-to-end: MinerU parse -> chunk -> LLM -> yield Issue list per chunk."""
-        payload = await self.mineru.extract(Path(pdf_path))
+        """End-to-end: OCR parse -> chunk -> LLM -> yield Issue list per chunk."""
+        payload = await self.ocr.extract(Path(pdf_path))
         meta = payload.get("meta") if isinstance(payload, dict) else None
-        paragraphs = self.mineru.to_paragraphs(payload)
+        paragraphs = self.ocr.to_paragraphs(payload)
         doc_name = Path(pdf_path).name
-        logging.info(f"MinerU paragraphs extracted: {len(paragraphs)} for {doc_name}")
+        logging.info(f"{self.ocr_name} paragraphs extracted: {len(paragraphs)} for {doc_name}")
         if custom_rules:
             logging.info(f"Custom rules enabled: {[r.name for r in custom_rules]}")
+        logging.info(f"Review party mode: {_review_party_text(review_party or settings.legal_review_party)}")
         if settings.debug and paragraphs:
-            logging.debug(f"MinerU paragraph sample: {paragraphs[0].get('content', '')[:200]}")
+            logging.debug(f"{self.ocr_name} paragraph sample: {paragraphs[0].get('content', '')[:200]}")
         if not paragraphs:
-            raise RuntimeError("MinerU 解析结果中未提取到段落文本（可能是返回 JSON 结构变化或解析字段不匹配）。")
+            raise RuntimeError("OCR 结果中未提取到段落文本。")
 
         page_sizes = _get_pdf_page_sizes(pdf_path)
         page_bbox_space = _get_page_bbox_space(paragraphs)
-        layout = _load_mineru_layout(meta, Path(pdf_path).stem)
+        layout = _load_mineru_layout(meta, Path(pdf_path).stem) if self.ocr_name == "MinerU" else None
 
         chunks = self._chunk_paragraphs(paragraphs, settings.pagination)
         logging.info(f"Chunk count: {len(chunks)} (pagination={settings.pagination})")
@@ -315,6 +417,10 @@ class LangChainPipeline:
         ]
 
         try:
+            logging.info(
+                f"LLM call start: chunk={chunk_index}, provider={settings.llm_provider}, "
+                f"paragraphs={len(chunk)}, chars={len(prepared)}"
+            )
             resp = await self.llm.ainvoke(messages)
             content = resp.content if hasattr(resp, "content") else resp
             if isinstance(content, list):
@@ -329,6 +435,18 @@ class LangChainPipeline:
                 logging.error(f"LLM output parse failed. chunk={chunk_index}, preview={snippet}")
                 return []
             raw_issues = out.issues
+
+            target_parties = _parse_review_targets(effective_review_party)
+            if "both" not in target_parties:
+                raw_issues = [
+                    i
+                    for i in (raw_issues or [])
+                    if getattr(i, "affected_party", "both") in (target_parties | {"both"})
+                ]
+
+            logging.info(
+                f"LLM call done: chunk={chunk_index}, issues={len(raw_issues or [])}"
+            )
         except Exception as e:
             logging.error(f"LLM invoke failed: {e}")
             return []
@@ -341,7 +459,12 @@ class LangChainPipeline:
             # Determine risk level based on issue type
             risk_level = self._get_risk_level_for_type(issue_type, custom_rules)
 
-            para_index = raw.para_index if isinstance(raw, ReviewIssue) else 0
+            requested_index = raw.para_index if isinstance(raw, ReviewIssue) else 0
+            para_index = _best_para_index_for_issue(
+                chunk,
+                requested_index,
+                raw.text if isinstance(raw, ReviewIssue) else "",
+            )
             para = chunk[para_index] if 0 <= para_index < len(chunk) else chunk[0]
 
             page_num = int(para.get("page_num", 1) or 1)
@@ -381,14 +504,17 @@ class LangChainPipeline:
                 para_index=para_index,
             )
 
+            source_text = (raw.text if isinstance(raw, ReviewIssue) else para["content"][:120])
+            suggested_fix = (raw.suggested_fix if isinstance(raw, ReviewIssue) else "")
+
             issues.append(
                 Issue(
                     id=str(uuid.uuid4()),
                     doc_id=doc_name,
-                    text=(raw.text if isinstance(raw, ReviewIssue) else para["content"][:120]),
+                    text=source_text,
                     type=issue_type,
                     status=IssueStatusEnum.not_reviewed,
-                    suggested_fix=(raw.suggested_fix if isinstance(raw, ReviewIssue) else ""),
+                    suggested_fix=suggested_fix,
                     explanation=(raw.explanation if isinstance(raw, ReviewIssue) else ""),
                     risk_level=risk_level,
                     location=location,
@@ -528,11 +654,21 @@ def _find_pdf_quadpoints(
         return None
 
 
-def _init_deepseek_model():
-    """
-    Initialize DeepSeek chat model using LangChain v1 init_chat_model provider API.
-    Falls back to OpenAI-compatible ChatOpenAI with custom base_url if provider package isn't available.
-    """
+def _init_llm_model():
+    provider = (settings.llm_provider or "deepseek").strip().lower()
+
+    if provider == "ollama":
+        logging.info(
+            f"Initializing local LLM via Ollama: model={settings.ollama_model}, base={settings.ollama_base_url}"
+        )
+        return ChatOpenAI(
+            api_key=settings.ollama_api_key or "ollama",
+            base_url=settings.ollama_base_url,
+            model=settings.ollama_model,
+            temperature=settings.llm_temperature,
+        )
+
+    # Default: DeepSeek
     try:
         from langchain.chat_models import init_chat_model
 
@@ -542,14 +678,19 @@ def _init_deepseek_model():
 
             os.environ.setdefault("DEEPSEEK_API_KEY", settings.deepseek_api_key)
         model_name = settings.deepseek_model or "deepseek-chat"
-        return init_chat_model(model_name, model_provider="deepseek", temperature=0.2)
+        logging.info(f"Initializing DeepSeek model via provider API: model={model_name}")
+        return init_chat_model(
+            model_name,
+            model_provider="deepseek",
+            temperature=settings.llm_temperature,
+        )
     except Exception as e:
         logging.warning(f"init_chat_model(deepseek) unavailable, falling back to ChatOpenAI: {e}")
         return ChatOpenAI(
             api_key=settings.deepseek_api_key,
             base_url=settings.deepseek_base_url,
             model=settings.deepseek_model,
-            temperature=0.2,
+            temperature=settings.llm_temperature,
         )
 
 
